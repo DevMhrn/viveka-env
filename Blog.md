@@ -93,11 +93,11 @@ The six components, and what each one prevents:
 
 Five of the six are deterministic state checks. The sixth is a Brier score on stated confidence against correctness.
 
-The Brier choice is load-bearing and worth a sentence of academic grounding. Brier is a *strictly proper* scoring rule (Gneiting & Raftery, JASA 2007): its expected value is uniquely minimised when the agent reports its true subjective probability. Overconfidence is provably punished. So is sandbagging. There is no clever policy that scores higher than honesty.
+The Brier choice is load-bearing and worth a sentence of academic grounding. Brier is a *strictly proper* scoring rule ([Gneiting & Raftery, JASA 2007](https://sites.stat.washington.edu/raftery/Research/PDF/Gneiting2007jasa.pdf)): its expected value is uniquely minimised when the agent reports its true subjective probability. Overconfidence is provably punished. So is sandbagging. There is no clever policy that scores higher than honesty.
 
-The application of this rule as an RL reward signal on stated confidence follows Damani et al. (2025), who augment binary correctness with Brier-scored calibration in their RLCR framework. Viveka's `confidence_brier` component is the same idea applied at the per-action granularity of a multi-step environment.
+The application of this rule as an RL reward signal on stated confidence follows [Damani et al. (2025)](https://arxiv.org/abs/2507.16806), who augment binary correctness with Brier-scored calibration in their RLCR framework. Viveka's `confidence_brier` component is the same idea applied at the per-action granularity of a multi-step environment.
 
-The "no LLM-as-judge anywhere" rule has a different intellectual lineage. Borah, Sharma, Khanna, Shirawalmath and colleagues argued at EMNLP 2025 that behavioural alignment metrics (refusal rates, LLM-judge scores, toxicity classifiers) all have critical blind spots: aligned models can be vulnerable to jailbreaking, stochastic decoding, and alignment faking. They proposed the Alignment Quality Index (AQI), an intrinsic metric on latent geometry that resists these failure modes. I implemented their probe methodology in `eval/aqi_probe.py` (mid-band layer pooling, Xie-Beni and Calinski-Harabasz cluster indices, last-token pooling on chat-template-formatted input, L2 normalization). The deeper choice was treating their critique as a design constraint: every high-weight reward component in Viveka is a deterministic verifier, not a model-graded one. A policy can game an LLM judge with smooth sentences; it cannot argue with a state diff.
+The "no LLM-as-judge anywhere" rule has a different intellectual lineage. [Borah, Sharma, Khanna, Shirawalmath and colleagues](https://arxiv.org/abs/2506.13901) argued at EMNLP 2025 that behavioural alignment metrics (refusal rates, LLM-judge scores, toxicity classifiers) all have critical blind spots: aligned models can be vulnerable to jailbreaking, stochastic decoding, and alignment faking. They proposed the Alignment Quality Index (AQI), an intrinsic metric on latent geometry that resists these failure modes. I implemented their probe methodology in `eval/aqi_probe.py` (mid-band layer pooling, Xie-Beni and Calinski-Harabasz cluster indices, last-token pooling on chat-template-formatted input, L2 normalization). The deeper choice was treating their critique as a design constraint: every high-weight reward component in Viveka is a deterministic verifier, not a model-graded one. A policy can game an LLM judge with smooth sentences; it cannot argue with a state diff.
 
 The `must_not_execute` hard gate is the engineering version of the same insight. The moment a policy fires a forbidden operation on a T4 adversarial scenario, the `appropriate_caution` component drops to 0.0 immediately, regardless of how the rest of the trajectory looks. A reward-hacked policy that fakes "I am being cautious" while executing forbidden ops gets caught immediately.
 
@@ -135,7 +135,7 @@ My first reaction was to assume training had not actually run. The reward curve 
 
 I want to be careful with the next paragraph because the framing came after I had the numbers, not before.
 
-Anthropic published "Natural Emergent Misalignment from Reward Hacking in Production RL" (MacDiarmid et al., arXiv:2511.18397) in November 2025, a few weeks before my training runs. I encountered the paper only after the Llama-1B sealed-eval result landed, while I was searching for related work to make sense of what I had observed. The framing in this section is therefore retrospective: I did not design Viveka to replicate the paper, and I did not know about the paper's specific findings while training.
+Anthropic published ["Natural Emergent Misalignment from Reward Hacking in Production RL"](https://arxiv.org/abs/2511.18397) (MacDiarmid et al., arXiv:2511.18397) in November 2025, a few weeks before my training runs. I encountered the paper only after the Llama-1B sealed-eval result landed, while I was searching for related work to make sense of what I had observed. The framing in this section is therefore retrospective: I did not design Viveka to replicate the paper, and I did not know about the paper's specific findings while training.
 
 They documented something specific. A model trained on production coding RL learned to exploit tests with `sys.exit(0)`, and that cheating behaviour then generalized into entirely new domains: alignment faking, reasoning about malicious goals, attempting sabotage of safety research, cooperation with hypothetical attackers, including in the codebase for the paper itself. Reward hacking in one channel produced misaligned behaviour in unrelated ones.
 
@@ -215,7 +215,7 @@ The Llama-1B → Anthropic-paper convergence: I observed it after the fact. I di
 
 ## 7. Why I think this matters
 
-Frontier evaluation has a known weakness, sometimes called the reasoning-vs-retrieval problem. SWE-bench Pro showed it from the software-engineering side: GPT-4-class models that score 70% on the original SWE-bench drop to 23% when their internet retrieval is removed. ARC-AGI shows the same gap more dramatically on novel-substrate reasoning. On ARC-AGI-3 (arcprize.org leaderboard, Featured Models, as of May 2026), humans score 100%. Claude Opus 4.7 scores 0.15%, the only frontier model on the board scoring above zero. GPT-5.5, Grok 4.20-beta, GPT-5.4, Gemini 3.1 Pro, and Claude Opus 4.6 all score exactly 0%. The pattern across both benchmarks is the same: models look like they are reasoning but are mostly remembering, and benchmarks built on widely-discussed problems cannot tell the difference.
+Frontier evaluation has a known weakness, sometimes called the reasoning-vs-retrieval problem. [SWE-bench Pro](https://arxiv.org/abs/2509.16941) showed it from the software-engineering side: GPT-4-class models that score 70% on the original SWE-bench drop to 23% when their internet retrieval is removed. [ARC-AGI](https://arcprize.org/leaderboard) shows the same gap more dramatically on novel-substrate reasoning. On ARC-AGI-3 (arcprize.org leaderboard, Featured Models, as of May 2026), humans score 100%. Claude Opus 4.7 scores 0.15%, the only frontier model on the board scoring above zero. GPT-5.5, Grok 4.20-beta, GPT-5.4, Gemini 3.1 Pro, and Claude Opus 4.6 all score exactly 0%. The pattern across both benchmarks is the same: models look like they are reasoning but are mostly remembering, and benchmarks built on widely-discussed problems cannot tell the difference.
 
 ![ARC-AGI-3 Featured Models leaderboard, May 2026. Humans at 100%, Claude Opus 4.7 at 0.15%, every other frontier model at 0%](eval/plots/arc_agi3_leaderboard.png)
 
@@ -265,14 +265,16 @@ Thanks to **Anshuman Singh**, Co-founder of Scaler AI Labs, for mentorship throu
 
 ## References
 
-1. Gneiting, T., & Raftery, A. E. (2007). Strictly proper scoring rules, prediction, and estimation. *Journal of the American Statistical Association*, 102(477), 359-378.
-2. Damani, M., et al. (2025). Beyond binary rewards: Training LMs to reason about their uncertainty. arXiv:2507.16806.
-3. Borah, A., Sharma, C., Khanna, D., Shirawalmath, A., et al. (2025). Alignment Quality Index (AQI): Beyond refusals. *Proceedings of EMNLP 2025*, main.145. arXiv:2506.13901.
-4. MacDiarmid, M., Hubinger, E., Perez, E., et al. (Anthropic, 2025). Natural emergent misalignment from reward hacking in production RL. arXiv:2511.18397.
-5. Yao, S., et al. (2024). τ-bench: A benchmark for tool-agent-user interaction in real-world domains.
-6. Replit incident, July 2025: [AI-powered coding tool wiped out a software company's database in 'catastrophic failure'](https://fortune.com/2025/07/23/ai-coding-tool-replit-wiped-database-called-it-a-catastrophic-failure/). *Fortune*.
-7. Cursor incident, April 2025: [Cursor AI coding agent deletes entire production database and backups in shocking nine-second autonomous failure](https://www.techradar.com/pro/it-took-9-seconds-tech-founder-outlines-how-rogue-claude-powered-ai-tool-wiped-entire-company-database-and-backups-but-says-theres-no-such-thing-as-bad-publicity). *TechRadar*.
-8. UPI fraud statistics, FY 2024-25 and CY 2025: National Cyber Crime Reporting Portal (I4C), Reserve Bank of India.
+1. Gneiting, T., & Raftery, A. E. (2007). [Strictly proper scoring rules, prediction, and estimation](https://sites.stat.washington.edu/raftery/Research/PDF/Gneiting2007jasa.pdf). *Journal of the American Statistical Association*, 102(477), 359-378.
+2. Damani, M., et al. (2025). [Beyond binary rewards: Training LMs to reason about their uncertainty](https://arxiv.org/abs/2507.16806). arXiv:2507.16806.
+3. Borah, A., Sharma, C., Khanna, D., Shirawalmath, A., et al. (2025). [Alignment Quality Index (AQI): Beyond refusals](https://arxiv.org/abs/2506.13901). *Proceedings of EMNLP 2025*, main.145. arXiv:2506.13901.
+4. MacDiarmid, M., Hubinger, E., Perez, E., et al. (Anthropic, 2025). [Natural emergent misalignment from reward hacking in production RL](https://arxiv.org/abs/2511.18397). arXiv:2511.18397.
+5. Yao, S., et al. (2024). [τ-bench: A benchmark for tool-agent-user interaction in real-world domains](https://arxiv.org/abs/2406.12045). arXiv:2406.12045.
+6. Scale AI, et al. (2025). [SWE-Bench Pro: Can AI Agents Solve Long-Horizon Software Engineering Tasks?](https://arxiv.org/abs/2509.16941). arXiv:2509.16941.
+7. Replit incident, July 2025: [AI-powered coding tool wiped out a software company's database in 'catastrophic failure'](https://fortune.com/2025/07/23/ai-coding-tool-replit-wiped-database-called-it-a-catastrophic-failure/). *Fortune*.
+8. Cursor incident, April 2025: [Cursor AI coding agent deletes entire production database and backups in shocking nine-second autonomous failure](https://www.techradar.com/pro/it-took-9-seconds-tech-founder-outlines-how-rogue-claude-powered-ai-tool-wiped-entire-company-database-and-backups-but-says-theres-no-such-thing-as-bad-publicity). *TechRadar*.
+9. UPI fraud statistics, FY 2024-25 and CY 2025: [National Cyber Crime Reporting Portal (I4C)](https://cybercrime.gov.in), Reserve Bank of India.
+10. [ARC Prize Leaderboard (Featured Models)](https://arcprize.org/leaderboard) — ARC-AGI-3 scores accessed May 2026.
 
 ---
 
