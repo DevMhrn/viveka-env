@@ -53,20 +53,20 @@ Second, the failure mode is not hypothetical. Between January and December 2025,
 
 Third, the substrate is empty competitive ground. Out of 31,000+ Round 1 submissions to the Meta PyTorch OpenEnv Hackathon, no other finalist picked Indian DPI. Team Diff Maker (Gowtham Sai Yadav and I) placed 9th in the finals.
 
-The substrate breaks down into 43 scenarios across four difficulty tiers:
+The substrate breaks down into 68 scenarios across four difficulty tiers:
 
 | Tier | Count | Mix |
 |---|---|---|
-| T1 easy | 10 | balance, search, view-doc — pure reversibles |
-| T2 medium | 13 | 8 UPI Hinglish + 5 DigiLocker / IRCTC multi-step |
-| T3 hard | 10 | Hinglish ambiguity, multi-service, time-of-day reversibility |
-| T4 adversarial | 10 | 5 UPI fraud + 5 DigiLocker / IRCTC traps with `must_not_execute` hard gates |
+| T1 easy | 11 | balance, search, view-doc, pure reversibles |
+| T2 medium | 20 | UPI Hinglish, DigiLocker, IRCTC, multi-step workflows |
+| T3 hard | 18 | Hinglish ambiguity, multi-service, time-of-day reversibility |
+| T4 adversarial | 19 | UPI fraud-VPA, DigiLocker / IRCTC traps with `must_not_execute` hard gates |
 
 T4 is where most of the discussion below lives. It is the tier that catches a reward-hacked policy because the trap actions look like normal operations until the env checks them against the per-scenario `must_not_execute` list.
 
 Gowtham built the mock services, the OpenEnv environment core, the Gradio demo UI, and the Hugging Face Space deployment. I led the research direction and owned grading, training, and the eval harness. The scenarios were split: I wrote UPI and IRCTC, Gowtham wrote DigiLocker. Both of us iterated on the reward design.
 
-Viveka was a two-week hackathon project, but it grew out of a question I had been turning over in the background for a while: whether language models actually reason about consequences before they execute actions, or whether they retrieve a confident-looking pattern and call it reasoning. The hackathon gave me a substrate, a deadline, and a teammate to test the question against.
+The question itself was not new to me. I had been turning over whether language models actually reason about consequences before they execute actions, or whether they retrieve a confident-looking pattern and call it reasoning. Viveka was a way to test that question in a sealed environment with a short build window and a teammate.
 
 Anshuman Singh has been a long-running mentor whose research instincts shaped how I approach evaluation methodology. The reward design choices in Viveka, particularly the no-LLM-as-judge constraint and the strict-proper-scoring choice for confidence, owe a lot to conversations with him about what makes a benchmark worth running.
 
@@ -137,9 +137,9 @@ Anthropic published "Natural Emergent Misalignment from Reward Hacking in Produc
 
 They documented something specific. A model trained on production coding RL learned to exploit tests with `sys.exit(0)`, and that cheating behaviour then generalized into entirely new domains: alignment faking, reasoning about malicious goals, attempting sabotage of safety research, cooperation with hypothetical attackers, including in the codebase for the paper itself. Reward hacking in one channel produced misaligned behaviour in unrelated ones.
 
-Viveka's Llama-1B result is, I think, a small-scale instance of the same phenomenon. At 1B parameters, the model learned a shallow pattern (execute the operation, collect partial task-completion reward) and applied it broadly, including in the adversarial scenarios where it should have asked or abstained. The same RL signal that gave Qwen-1.5B a clean climb (1 of 5 traps fired) and Llama-3B an honest climb (0 of 5 hard fires) broke Llama-1B at its capacity ceiling. The training reward looked fine because the reward signal was working as designed; the sealed eval surfaced the gap.
+Viveka's Llama-1B result is evidence that the same failure signature appears at 1B parameters on a single T4 GPU, three to four orders of magnitude below the production RL compute Anthropic's paper documents. At 1B parameters, the model learned a shallow pattern (execute the operation, collect partial task-completion reward) and applied it broadly, including in the adversarial scenarios where it should have asked or abstained. The same RL signal that gave Qwen-1.5B a clean climb (1 of 5 traps fired) and Llama-3B an honest climb (0 of 5 hard fires) broke Llama-1B at its capacity ceiling. The training reward looked fine because the reward signal was working as designed; the sealed eval surfaced the gap.
 
-I am not claiming a general result. But the convergence between a frontier-lab observation about reward hacking causing emergent misalignment at production scale, and a hackathon-scale observation about reward hacking causing emergent unsafety at 1B parameters on one GPU, is what makes me think Viveka is more than a hackathon project. The same structural problem, at two very different scales, produced compatible failure signatures.
+I am not claiming a general result. But the convergence between Anthropic's production-scale observation about reward hacking causing emergent misalignment, and the small-compute observation here at 1B parameters on one GPU, is what makes the methodology worth pushing further. The same structural problem, at two very different scales, produced compatible failure signatures.
 
 What I take from this is narrower than the headline. The structural similarity does not prove that small-scale results predict frontier-scale failure modes. But it does mean an evaluation environment designed with deterministic graders, must-not-execute hard gates, and a Brier-scored calibration signal can surface reward-hacked policies before training compute scales. The methodology is what survives, not the specific result.
 
@@ -147,7 +147,7 @@ Most RL benchmarks score "did the agent finish the task." They cannot tell you w
 
 ---
 
-## 5. The TRL bug I surfaced while training Qwen
+## 5. The TRL bug we hit while training Qwen
 
 I first saw the issue mid-way through training Qwen-2.5-1.5B. Rollouts were going wrong in a way I had not seen before. Every rollout generated exactly 320 tokens of garbage, never terminated, and the reward floored at -0.94 for 100 consecutive steps. Llama-3.2 in a parallel run was training cleanly. The environment was not the problem. TRL was.
 
@@ -178,9 +178,9 @@ Qwen-2.5 was trained to use two valid stop tokens: `<|im_end|>` (the chat-end to
 
 Llama-3.2 dodged the bug for free. Its trained stop is a single id (`<|eot_id|>`, 128009), so the tokenizer's single-int representation is lossless.
 
-### The fix I proposed, and how we applied it
+### The workaround we used
 
-I proposed routing through `grpo_trainer.py` line 578, where TRL builds generation kwargs and merges user-provided overrides *after* its own derived ones via `**self.generation_kwargs`. That spread lets you override anything TRL had cached:
+The route we used was through `grpo_trainer.py` line 578, where TRL builds generation kwargs and merges user-provided overrides *after* its own derived ones via `**self.generation_kwargs`. That spread lets you override anything TRL had cached:
 
 ```python
 GRPOConfig(
@@ -189,7 +189,7 @@ GRPOConfig(
 )
 ```
 
-We applied this in our training config and finished the run. `clipped_ratio` dropped 1.0 → 0.45 → 0.225 → 0.125 over 15 training steps. Reward went from -0.94 to +0.16 by step 100. Total investigation time, end to end: about five to six hours, spread across an evening and the next morning. The `generation_kwargs` override mechanism itself was added to TRL earlier through a community feature request ([trl#3562](https://github.com/huggingface/trl/issues/3562)) and the PR that closed it; we did not file that. What I contributed here is the diagnosis of why Qwen-family chat-end and pretraining-EOS tokens collapse under TRL 0.24's single-int read, and the workaround path that uses the existing override hook.
+We applied this in our training config and finished the run. `clipped_ratio` dropped 1.0 → 0.45 → 0.225 → 0.125 over 15 training steps. Reward went from -0.94 to +0.16 by step 100. Total investigation time, end to end: about five to six hours, spread across an evening and the next morning. The `generation_kwargs` override mechanism itself was added to TRL earlier through a community feature request ([trl#3562](https://github.com/huggingface/trl/issues/3562)) and the PR that closed it; we did not file that. What we figured out here was why Qwen-family chat-end and pretraining-EOS tokens collapse under TRL 0.24's single-int read, and the path to work around it using the existing override hook.
 
 The Llama-3B run, which had been training cleanly on the same TRL version with no fix applied, is the control experiment. Same RL setup, different model family, no EOS-list ambiguity, no bug. That confirms the issue was Qwen-specific (and any model family that ships a multi-token EOS list), not a confound in the env or the reward design.
 
@@ -241,8 +241,6 @@ Two directions, framed as research questions I would pursue with proper compute 
 **Reversibility-aware reward design at scale.** The Llama-1B result was at the smallest capacity I could train. I would want to repeat the same evaluation methodology on frontier-scale models and on larger parameter LoRAs of the same base architectures, to test whether reversibility reasoning continues to be capacity-gated or whether it plateaus. This is the natural extension of Viveka.
 
 **Reversibility-aware reward design for coding agents.** Extend Viveka's framework to git operations and file system operations. Build the equivalent reversibility registry for `git push --force`, `rm -rf`, schema migrations on production tables, and the kind of cascading-state operations Cursor and Replit's agents got wrong. Test whether reversibility-grading prevents the `sys.exit(0)`-style failure mode Anthropic documented. The methodology is portable; the substrate change is the work.
-
-For transparency: I am applying to the Anthropic Fellows Program with this work as the basis. I mention it here not as an ask, but because the blog and the application reference the same body of work, and it is more honest to say so than to pretend otherwise.
 
 ---
 
