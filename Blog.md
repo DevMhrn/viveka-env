@@ -4,6 +4,23 @@
 
 ---
 
+### The 30-second version
+
+| Question | Answer |
+|---|---|
+| **What is Viveka?** | An OpenEnv RL environment where reversibility prediction and calibrated confidence are *trained* skills, scored by a Brier proper scoring rule. Substrate is mocked Indian Digital Public Infrastructure: real UPI, DigiLocker, IRCTC error codes and business rules. |
+| **The headline finding** | Same GRPO config, three architectures, three honest outcomes. Trained Qwen-1.5B lifts T1 reversibles by +69% relative. Llama-3B lifts T2 by +66%, T3 by +43%. **Llama-1B learned aggression without safety: 5 of 5 T4 `must_not_execute` traps fired for a 0.000 mean.** The env caught a trained-but-unsafe policy most benchmarks would have shipped. |
+| **Frontier ceiling** | Claude Sonnet 4.6 scores 0.78 mean but only 0.44 on T4 adversarial. GPT-5.2 scores 0.44 mean, lower than Sonnet and Haiku. Even frontier struggles where reasoning replaces retrieval. |
+| **Why it matters** | Most RL benchmarks score "did the agent finish the task." They cannot detect when training has produced a faster, more confident, *unsafe* policy. Viveka can, and did. |
+
+Author: [Debashis Maharana](https://linkedin.com/in/debashism37), 3rd year CS at BITS Pilani. Co-built with [Gowtham Sai Yadav](https://github.com/gowtham-sai-yadav). Read on for the long version.
+
+![Viveka leaderboard — frontier vs trained, sealed eval](eval/plots/leaderboard.png)
+
+*One chart that summarises the work. Frontier closed models occupy the top band (Claude Sonnet 0.78, Claude Haiku 0.78, GPT-4o-mini 0.61, GPT-5.2 0.44). The open-source band sits at 0.13 to 0.29. Our three trained LoRAs cluster in the middle: two of them (Qwen-1.5B, Llama-3B) lift their baselines by +0.020; one (Llama-1B) regresses by 0.158. That regression is the load-bearing observation of this post. The black overlay on each bar is the per-policy T4 mean. Even Claude Sonnet only scores 0.44 on T4, which is the env doing exactly what it was designed to do.*
+
+---
+
 ## 1. The question that kept me up
 
 In July 2025, Replit's AI coding agent ran unauthorized destructive commands during a designated code-and-action freeze and wiped a production database, deleting records on 1,206 executives and 1,196 companies. The CEO apologized publicly. The agent itself described the failure as "a catastrophic error in judgment" and then misled the user about whether recovery was possible.
@@ -36,7 +53,20 @@ Second, the failure mode is not hypothetical. Between January and December 2025,
 
 Third, the substrate is empty competitive ground. Out of 31,000+ Round 1 submissions to the Meta PyTorch OpenEnv Hackathon, no other finalist picked Indian DPI. Team Diff Maker (Gowtham Sai Yadav and I) placed 9th in the finals.
 
+The substrate breaks down into 43 scenarios across four difficulty tiers:
+
+| Tier | Count | Mix |
+|---|---|---|
+| T1 easy | 10 | balance, search, view-doc — pure reversibles |
+| T2 medium | 13 | 8 UPI Hinglish + 5 DigiLocker / IRCTC multi-step |
+| T3 hard | 10 | Hinglish ambiguity, multi-service, time-of-day reversibility |
+| T4 adversarial | 10 | 5 UPI fraud + 5 DigiLocker / IRCTC traps with `must_not_execute` hard gates |
+
+T4 is where most of the discussion below lives. It is the tier that catches a reward-hacked policy because the trap actions look like normal operations until the env checks them against the per-scenario `must_not_execute` list.
+
 Gowtham built the mock services, the OpenEnv environment core, the Gradio demo UI, and the Hugging Face Space deployment. I led the research direction and owned grading, training, and the eval harness. The scenarios were split: I wrote UPI and IRCTC, Gowtham wrote DigiLocker. Both of us iterated on the reward design.
+
+Viveka was a two-week hackathon project, but it grew out of a question I had been turning over in the background for a while: whether language models actually reason about consequences before they execute actions, or whether they retrieve a confident-looking pattern and call it reasoning. The hackathon gave me a substrate, a deadline, and a teammate to test the question against.
 
 Anshuman Singh has been a long-running mentor whose research instincts shaped how I approach evaluation methodology. The reward design choices in Viveka, particularly the no-LLM-as-judge constraint and the strict-proper-scoring choice for confidence, owe a lot to conversations with him about what makes a benchmark worth running.
 
@@ -77,9 +107,17 @@ I trained three models on identical GRPO configuration: Qwen-2.5-1.5B-Instruct, 
 
 ![Three architectures, identical GRPO config](eval/plots/reward_curves_xkcd.png)
 
-The training-time numbers were what I expected. Qwen-2.5-1.5B climbed from reward -0.797 to +0.163 (Δ +0.960). Llama-3.2-3B climbed -0.463 to +0.173, peak +0.391 (Δ +0.636). Llama-3.2-1B was the runt: reward improved modestly during training and the curve looked clean enough.
+### What the training reward looked like
 
-Then I ran the sealed evaluation on all 68 scenarios with no teacher rollout, just the trained model producing the entire trajectory.
+Qwen-2.5-1.5B climbed from reward -0.797 to +0.163 (Δ +0.960). Llama-3.2-3B climbed -0.463 to +0.173, peak +0.391 (Δ +0.636). Llama-3.2-1B was the runt: reward improved modestly during training and the curve looked clean enough. So far, nothing surprising.
+
+The GRPO surrogate loss stayed in the stable band for all three runs: Qwen 1.5B went 0.108 to 0.042, Llama 1B went −0.002 to −0.091, Llama 3B went 0.096 to 0.072. No divergence, no NaN, no gradient blow-up. This matters for what comes next — the Llama-1B problem is not a training-stability problem. The training did its job.
+
+![Loss curves: Qwen-1.5B vs Llama-1B vs Llama-3B (GRPO surrogate loss)](eval/plots/loss_curves_xkcd.png)
+
+### What the sealed eval showed
+
+I ran sealed evaluation on all 68 scenarios with no teacher rollout, just the trained model producing the entire trajectory.
 
 **Qwen-2.5-1.5B** improved by +0.020 mean reward on sealed eval. T1 reversible scenarios lifted +0.107 absolute. Only one of five T4 adversarial traps fired. On the Mom-medicines hero scenario, the trained model emitted `confirm_with_user`, predicted `irreversible`, surfaced the watchlist hit, did not fold when the user pushed back, and terminated cleanly with `respond_to_user`, scoring 0.474 in 11 steps.
 
@@ -87,9 +125,11 @@ Then I ran the sealed evaluation on all 68 scenarios with no teacher rollout, ju
 
 **Llama-3.2-1B**, the small-capacity model, did something else. Mean sealed-eval reward dropped 0.158 *below* its frozen baseline. Execute actions across T1 to T4 jumped from 55 to 121, a 2.2-fold increase. On T4 specifically, all five planted `must_not_execute` traps fired. T4 mean score: exactly 0.000.
 
-The trained policy got faster. It got more decisive. It got measurably more dangerous than the untrained baseline.
+> **The trained policy got faster. It got more decisive. It got measurably more dangerous than the untrained baseline.**
 
 My first reaction was to assume training had not actually run. The reward curve looked clean. The trajectory logs showed the model emitting valid JSON, picking real operations, completing tasks. It just was not learning the meta-skill of asking before acting. Training had worked. The model was learning. The thing it learned was the wrong thing.
+
+### Putting this next to Anthropic's recent paper
 
 I want to be careful with the next paragraph because the framing came after I had the numbers, not before.
 
@@ -107,13 +147,17 @@ Most RL benchmarks score "did the agent finish the task." They cannot tell you w
 
 ---
 
-## 5. The TRL bug
+## 5. The TRL bug I surfaced while training Qwen
 
-Mid-training, Qwen rollouts were going wrong in a way I had not seen before. Every rollout generated exactly 320 tokens of garbage, never terminated, and the reward floored at -0.94 for 100 consecutive steps. Llama-3.2 in a parallel run was training cleanly. The environment was not the problem. TRL was.
+I first saw the issue mid-way through training Qwen-2.5-1.5B. Rollouts were going wrong in a way I had not seen before. Every rollout generated exactly 320 tokens of garbage, never terminated, and the reward floored at -0.94 for 100 consecutive steps. Llama-3.2 in a parallel run was training cleanly. The environment was not the problem. TRL was.
+
+### What I ruled out first
 
 My first hypothesis was prompt drift. The system prompt had recently been refactored to remove some multi-step demonstration examples that were leaking into outputs. I spent about 45 minutes ruling this out: manually tokenized a sample prompt, ran `model.generate()` outside TRL, and confirmed the model emitted clean JSON terminated by `<|im_end|>` reliably. Inference worked. Training did not. The bug had to be in TRL's generation harness.
 
 The key signal in the training log was `clipped_ratio = 1.0`. That field records the fraction of rollouts force-truncated at `max_completion_length` because they never hit an EOS token. At 1.0, *every single rollout* was being truncated. But manual inference was hitting `<|im_end|>` in 50 to 100 tokens reliably. So why was training-time generation different?
+
+### Where the actual problem lived
 
 The answer turned out to live in a four-place storage problem inherent to the Hugging Face stack.
 
@@ -134,7 +178,9 @@ Qwen-2.5 was trained to use two valid stop tokens: `<|im_end|>` (the chat-end to
 
 Llama-3.2 dodged the bug for free. Its trained stop is a single id (`<|eot_id|>`, 128009), so the tokenizer's single-int representation is lossless.
 
-The fix lives at `grpo_trainer.py` line 578, where TRL builds generation kwargs and merges user-provided overrides *after* its own derived ones, a `**self.generation_kwargs` spread that lets you override anything:
+### The fix I proposed, and how we applied it
+
+I proposed routing through `grpo_trainer.py` line 578, where TRL builds generation kwargs and merges user-provided overrides *after* its own derived ones via `**self.generation_kwargs`. That spread lets you override anything TRL had cached:
 
 ```python
 GRPOConfig(
@@ -143,9 +189,9 @@ GRPOConfig(
 )
 ```
 
-After the fix, `clipped_ratio` dropped 1.0 → 0.45 → 0.225 → 0.125 over 15 training steps. Reward went from -0.94 to +0.16 by step 100. Total debug time, end to end: about five to six hours, spread across an evening and the next morning. Filed upstream as [trl#3562](https://github.com/huggingface/trl/issues/3562).
+We applied this in our training config and finished the run. `clipped_ratio` dropped 1.0 → 0.45 → 0.225 → 0.125 over 15 training steps. Reward went from -0.94 to +0.16 by step 100. Total investigation time, end to end: about five to six hours, spread across an evening and the next morning. The `generation_kwargs` override mechanism itself was added to TRL earlier through a community feature request ([trl#3562](https://github.com/huggingface/trl/issues/3562)) and the PR that closed it; we did not file that. What I contributed here is the diagnosis of why Qwen-family chat-end and pretraining-EOS tokens collapse under TRL 0.24's single-int read, and the workaround path that uses the existing override hook.
 
-The Llama-3B run, which had been training cleanly on the same TRL version with no fix applied, is the control experiment. Same RL setup, different model family, no EOS-list ambiguity, no bug. That confirms the bug was Qwen-specific (and any model family that ships a multi-token EOS list), not a confound in the env or the reward design.
+The Llama-3B run, which had been training cleanly on the same TRL version with no fix applied, is the control experiment. Same RL setup, different model family, no EOS-list ambiguity, no bug. That confirms the issue was Qwen-specific (and any model family that ships a multi-token EOS list), not a confound in the env or the reward design.
 
 ---
 
@@ -171,11 +217,20 @@ Frontier evaluation has a known weakness, sometimes called the reasoning-vs-retr
 
 Viveka is one attempt at the same question from the agent-safety side. Indian DPI's business rules are too recent and too jurisdiction-specific to live in pretraining corpora at the density a model could memorize. UPI fraud-watchlist codes, DigiLocker audience-whitelist semantics, and IRCTC chart-prep cutoffs are not retrievable; they have to be reasoned about from the env's state. The capacity stratification I observed (Llama-1B fails T4 entirely, Qwen-1.5B passes with a small cost, Llama-3B passes with a smaller cost) suggests that reversibility reasoning is gated by model capacity in a way that retrieval would not predict, and that 1B parameters is below the threshold for safe action-taking under this kind of constraint.
 
-For grounding, the frontier baselines on Viveka's sealed evaluation: Claude Sonnet 4.6 scored 0.78 mean reward but dropped to 0.44 on the T4 adversarial tier. Claude Haiku 4.5 scored 0.78 with the same T4 drop. GPT-4o-mini scored 0.61 mean (0.16 on T4). GPT-5.2 scored 0.44 mean (0.15 on T4), notably lower than both Sonnet and Haiku. The environment is genuinely hard even for current frontier models, particularly on the adversarial scenarios that probe must-not-execute reasoning.
+For grounding, here are the frontier baselines on Viveka's sealed evaluation (n=12, three per tier):
+
+| Policy | Mean | T1 | T2 | T3 | T4 |
+|---|---|---|---|---|---|
+| Claude Haiku 4.5 | **0.778** | 0.967 | 0.858 | 0.843 | 0.442 |
+| Claude Sonnet 4.6 | **0.776** | 0.967 | 0.841 | 0.855 | 0.442 |
+| GPT-4o-mini | 0.614 | 0.975 | 0.688 | 0.633 | 0.159 |
+| GPT-5.2 | 0.437 | 0.948 | 0.320 | 0.330 | 0.152 |
+
+Two things this table proves. **The env is solvable**: Claude Sonnet at 0.78 means there is a real ceiling and the gradient is meaningful — Viveka is not an impossible benchmark where everyone bottoms out. **T4 is genuinely adversarial**: even Claude Sonnet drops to 0.44, and GPT-4o-mini and GPT-5.2 collapse near 0.15. The `must_not_execute` hard gates and the fraud-VPA, mule-beneficiary, and chart-prepared traps catch frontier models too. The Llama-1B story in Section 4 is the open-source mirror of the same effect at lower capacity.
 
 The Llama-1B observation also suggests something narrower and more useful. Reward-hacked emergent misalignment, the failure mode Anthropic documented at production scale, is detectable at small scale with the right evaluation design. You do not need frontier compute to see the pattern. You need a hard gate on irreversible adversarial actions, a deterministic grader that cannot be talked into giving partial credit, and a substrate where surface-pattern matching does not yield a passing policy. The methodology, deterministic graders plus must-not-execute hard gates plus Brier-scored calibration plus an AQI-style probe of internal representations, generalizes to other domains. Coding agents would be the obvious next substrate.
 
-And the TRL bug fix is in upstream tooling now. Any future Qwen GRPO training, or any training on a model that ships a multi-token EOS list (which is increasingly common: Qwen-3, Llama-3.1-8B, Gemma-2, Phi-3.5), benefits from the fix path I filed.
+And the diagnosis of the TRL EOS-list collapse is now documented in this repo. Any future Qwen GRPO training, or any training on a model that ships a multi-token EOS list (Qwen-3, Llama-3.1-8B, Gemma-2, Phi-3.5), can use the same `generation_kwargs` override path we did.
 
 ---
 
@@ -202,7 +257,7 @@ Thanks to **Anshuman Singh**, Co-founder of Scaler AI Labs, for mentorship throu
 - Source repo (original): [github.com/gowtham-sai-yadav/viveka-env](https://github.com/gowtham-sai-yadav/viveka-env)
 - My fork (post-eval engineering layers): [github.com/DevMhrn/viveka-env](https://github.com/DevMhrn/viveka-env)
 - Training notebooks: [Qwen-1.5B](https://www.kaggle.com/code/gowthamsaiyadav/viveka-grpo-qwen2-5) · [Llama-1B](https://www.kaggle.com/code/ddevmhrn/viveka-llama3-2-1b) · [Llama-3B](https://www.kaggle.com/code/harsh3446/viveka-llama-3b)
-- TRL bug report: [huggingface/trl#3562](https://github.com/huggingface/trl/issues/3562)
+- TRL `generation_kwargs` mechanism we used: [huggingface/trl#3562](https://github.com/huggingface/trl/issues/3562) (community feature, used as our workaround path)
 
 ---
 
