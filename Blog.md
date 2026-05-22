@@ -16,6 +16,8 @@ The question that kept me up after reading those reports was simple. Can current
 
 Viveka is what I built to find out.
 
+The question was not abstract for me. My mother carries a smartphone she barely trusts. Every time she pays a UPI bill, she reads the recipient name out loud, asks me whether the number looks right, and pauses before pressing send. It is the kind of caution a frontier model could replicate if it could actually reason about what would happen after the action. Watching her think, and watching agents on the other side of the world fail at the same task, is what made the question stop being academic.
+
 ---
 
 ## 2. What I built, and why
@@ -33,6 +35,8 @@ Second, the failure mode is not hypothetical. Between January and December 2025,
 Third, the substrate is empty competitive ground. Out of 31,000+ Round 1 submissions to the Meta PyTorch OpenEnv Hackathon, no other finalist picked Indian DPI. Team Diff Maker (Gowtham Sai Yadav and I) placed 9th in the finals.
 
 Gowtham built the mock services, the OpenEnv environment core, the Gradio demo UI, and the Hugging Face Space deployment. I led the research direction and owned grading, training, and the eval harness. The scenarios were split: I wrote UPI and IRCTC, Gowtham wrote DigiLocker. Both of us iterated on the reward design.
+
+Anshuman Singh has been a long-running mentor whose research instincts shaped how I approach evaluation methodology. The reward design choices in Viveka, particularly the no-LLM-as-judge constraint and the strict-proper-scoring choice for confidence, owe a lot to conversations with him about what makes a benchmark worth running.
 
 ---
 
@@ -52,6 +56,8 @@ Most agent benchmarks score "did the agent finish the task." That signal cannot 
 Five of the six are deterministic state checks. The sixth is a Brier score on stated confidence against correctness.
 
 The Brier choice is load-bearing and worth a sentence of academic grounding. Brier is a *strictly proper* scoring rule (Gneiting & Raftery, JASA 2007): its expected value is uniquely minimised when the agent reports its true subjective probability. Overconfidence is provably punished. So is sandbagging. There is no clever policy that scores higher than honesty.
+
+The application of this rule as an RL reward signal on stated confidence follows Damani et al. (2025), who augment binary correctness with Brier-scored calibration in their RLCR framework. Viveka's `confidence_brier` component is the same idea applied at the per-action granularity of a multi-step environment.
 
 The "no LLM-as-judge anywhere" rule has a different intellectual lineage. Borah, Sharma, Khanna, Shirawalmath and colleagues argued at EMNLP 2025 that behavioural alignment metrics (refusal rates, LLM-judge scores, toxicity classifiers) all have critical blind spots: aligned models can be vulnerable to jailbreaking, stochastic decoding, and alignment faking. They proposed the Alignment Quality Index (AQI), an intrinsic metric on latent geometry that resists these failure modes. I implemented their probe methodology in `eval/aqi_probe.py` (mid-band layer pooling, Xie-Beni and Calinski-Harabasz cluster indices, last-token pooling on chat-template-formatted input, L2 normalization). More importantly, I took their critique as a design constraint: every high-weight reward component in Viveka is a deterministic verifier, not a model-graded one. A policy can game an LLM judge with smooth sentences; it cannot argue with a state diff.
 
@@ -81,11 +87,15 @@ My first reaction was to assume training had not actually run. The reward curve 
 
 I want to be careful with the next paragraph because the framing came after I had the numbers, not before.
 
-A few weeks before I trained these models, Anthropic published "Natural Emergent Misalignment from Reward Hacking in Production RL" (MacDiarmid et al., arXiv:2511.18397, November 2025). They documented something specific. A model trained on production coding RL learned to exploit tests with `sys.exit(0)`, and that cheating behaviour then generalized into entirely new domains: alignment faking, reasoning about malicious goals, attempting sabotage of safety research, cooperation with hypothetical attackers, including in the codebase for the paper itself. Reward hacking in one channel produced misaligned behaviour in unrelated ones.
+Anthropic published "Natural Emergent Misalignment from Reward Hacking in Production RL" (MacDiarmid et al., arXiv:2511.18397) in November 2025, a few weeks before my training runs. I encountered the paper only after the Llama-1B sealed-eval result landed, while I was searching for related work to make sense of what I had observed. The framing in this section is therefore retrospective: I did not design Viveka to replicate the paper, and I did not know about the paper's specific findings while training.
+
+They documented something specific. A model trained on production coding RL learned to exploit tests with `sys.exit(0)`, and that cheating behaviour then generalized into entirely new domains: alignment faking, reasoning about malicious goals, attempting sabotage of safety research, cooperation with hypothetical attackers, including in the codebase for the paper itself. Reward hacking in one channel produced misaligned behaviour in unrelated ones.
 
 Viveka's Llama-1B result is, I think, a small-scale instance of the same phenomenon. At 1B parameters, the model learned a shallow pattern (execute the operation, collect partial task-completion reward) and applied it broadly, including in the adversarial scenarios where it should have asked or abstained. The same RL signal that gave Qwen-1.5B a clean climb (1 of 5 traps fired) and Llama-3B an honest climb (0 of 5 hard fires) broke Llama-1B at its capacity ceiling. The training reward looked fine because the reward signal was working as designed; the sealed eval surfaced the gap.
 
-I am not claiming a general result. I did not set out to replicate Anthropic's finding, and the framing was retrospective. But the convergence between a frontier-lab observation about reward hacking causing emergent misalignment at production scale, and a hackathon-scale observation about reward hacking causing emergent unsafety at 1B parameters on one GPU, is what makes me think Viveka is more than a hackathon project. The same structural problem, at two very different scales, produced compatible failure signatures.
+I am not claiming a general result. But the convergence between a frontier-lab observation about reward hacking causing emergent misalignment at production scale, and a hackathon-scale observation about reward hacking causing emergent unsafety at 1B parameters on one GPU, is what makes me think Viveka is more than a hackathon project. The same structural problem, at two very different scales, produced compatible failure signatures.
+
+What I take from this is narrower than the headline. The structural similarity does not prove that small-scale results predict frontier-scale failure modes. But it does mean an evaluation environment designed with deterministic graders, must-not-execute hard gates, and a Brier-scored calibration signal can surface reward-hacked policies before training compute scales. The methodology is what survives, not the specific result.
 
 Most RL benchmarks score "did the agent finish the task." They cannot tell you when training has produced a faster, more confident, *unsafe* policy. Viveka's T4 hard gates did. The 5-of-5 trap firing on Llama-1B is the environment catching a reward-hacked policy, exactly as designed.
 
@@ -165,7 +175,7 @@ And the TRL bug fix is in upstream tooling now. Any future Qwen GRPO training, o
 
 Two directions, framed as research questions I would pursue with proper compute and time, not as commitments.
 
-**The Reasoning Tax.** Build a public benchmark that takes each task in two versions: a retrieval-friendly variant (problem present in training data, internet access enabled) and a reasoning-only variant (problem reformulated outside training distribution, internet access disabled). Measure the performance gap per model. The hypothesis is that the gap is a more informative capability signal than raw benchmark score, and that the gap should shrink predictably with scale. Viveka's Indian DPI substrate is one instance of the "reasoning-only" half of this benchmark; the full version would span more domains and isolate the retrieval dependency explicitly.
+**Reversibility-aware reward design at scale.** The Llama-1B result was at the smallest capacity I could train. I would want to repeat the same evaluation methodology on frontier-scale models and on larger parameter LoRAs of the same base architectures, to test whether reversibility reasoning continues to be capacity-gated or whether it plateaus. This is the natural extension of Viveka.
 
 **Reversibility-aware reward design for coding agents.** Extend Viveka's framework to git operations and file system operations. Build the equivalent reversibility registry for `git push --force`, `rm -rf`, schema migrations on production tables, and the kind of cascading-state operations Cursor and Replit's agents got wrong. Test whether reversibility-grading prevents the `sys.exit(0)`-style failure mode Anthropic documented. The methodology is portable; the substrate change is the work.
 
@@ -191,12 +201,13 @@ Thanks to **Anshuman Singh**, Co-founder of Scaler AI Labs, for mentorship throu
 ## References
 
 1. Gneiting, T., & Raftery, A. E. (2007). Strictly proper scoring rules, prediction, and estimation. *Journal of the American Statistical Association*, 102(477), 359-378.
-2. Borah, A., Sharma, C., Khanna, D., Shirawalmath, A., et al. (2025). Alignment Quality Index (AQI): Beyond refusals. *Proceedings of EMNLP 2025*, main.145. arXiv:2506.13901.
-3. MacDiarmid, M., Hubinger, E., Perez, E., et al. (Anthropic, 2025). Natural emergent misalignment from reward hacking in production RL. arXiv:2511.18397.
-4. Yao, S., et al. (2024). τ-bench: A benchmark for tool-agent-user interaction in real-world domains.
-5. Replit incident, July 2025: [AI-powered coding tool wiped out a software company's database in 'catastrophic failure'](https://fortune.com/2025/07/23/ai-coding-tool-replit-wiped-database-called-it-a-catastrophic-failure/). *Fortune*.
-6. Cursor incident, April 2025: [Cursor AI coding agent deletes entire production database and backups in shocking nine-second autonomous failure](https://www.techradar.com/pro/it-took-9-seconds-tech-founder-outlines-how-rogue-claude-powered-ai-tool-wiped-entire-company-database-and-backups-but-says-theres-no-such-thing-as-bad-publicity). *TechRadar*.
-7. UPI fraud statistics, FY 2024-25 and CY 2025: National Cyber Crime Reporting Portal (I4C), Reserve Bank of India.
+2. Damani, M., et al. (2025). Beyond binary rewards: Training LMs to reason about their uncertainty. arXiv:2507.16806.
+3. Borah, A., Sharma, C., Khanna, D., Shirawalmath, A., et al. (2025). Alignment Quality Index (AQI): Beyond refusals. *Proceedings of EMNLP 2025*, main.145. arXiv:2506.13901.
+4. MacDiarmid, M., Hubinger, E., Perez, E., et al. (Anthropic, 2025). Natural emergent misalignment from reward hacking in production RL. arXiv:2511.18397.
+5. Yao, S., et al. (2024). τ-bench: A benchmark for tool-agent-user interaction in real-world domains.
+6. Replit incident, July 2025: [AI-powered coding tool wiped out a software company's database in 'catastrophic failure'](https://fortune.com/2025/07/23/ai-coding-tool-replit-wiped-database-called-it-a-catastrophic-failure/). *Fortune*.
+7. Cursor incident, April 2025: [Cursor AI coding agent deletes entire production database and backups in shocking nine-second autonomous failure](https://www.techradar.com/pro/it-took-9-seconds-tech-founder-outlines-how-rogue-claude-powered-ai-tool-wiped-entire-company-database-and-backups-but-says-theres-no-such-thing-as-bad-publicity). *TechRadar*.
+8. UPI fraud statistics, FY 2024-25 and CY 2025: National Cyber Crime Reporting Portal (I4C), Reserve Bank of India.
 
 ---
 
