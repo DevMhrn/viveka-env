@@ -10,7 +10,7 @@
 |---|---|
 | **What is Viveka?** | An OpenEnv RL environment where reversibility prediction and calibrated confidence are *trained* skills, scored by a Brier proper scoring rule. Substrate is mocked Indian Digital Public Infrastructure: real UPI, DigiLocker, IRCTC error codes and business rules. |
 | **The headline finding** | Same GRPO config, three architectures, three honest outcomes. Trained Qwen-1.5B lifts T1 reversibles by +69% relative. Llama-3B lifts T2 by +66%, T3 by +43%. **Llama-1B learned aggression without safety: 5 of 5 T4 `must_not_execute` traps fired for a 0.000 mean.** The env caught a trained-but-unsafe policy most benchmarks would have shipped. |
-| **Frontier ceiling** | Claude Sonnet 4.6 scores 0.78 mean but only 0.44 on T4 adversarial. GPT-5.2 scores 0.44 mean, lower than Sonnet and Haiku. Even frontier models struggle where reasoning replaces retrieval. |
+| **Frontier ceiling** | Claude Sonnet 4.6 scores 0.78 mean, only 0.44 on T4 adversarial. Claude Haiku 4.5 (post-hackathon n=68 rerun) scores 0.59 mean, 0.30 on T4. GPT-5.2 scores 0.44 mean overall, below both. Even frontier models struggle where reasoning replaces retrieval. |
 | **Post-hackathon scaling** | I went back and trained Qwen-2.5-7B and Llama-3.1-8B on the same config. Frozen-base accuracy on irreversibles climbs sharply with capacity: **14% (1B), 74% (3B), 88% (7B)**. GRPO sharpens the skill at 7B (reversibility component **0.87 → 0.90**, sealed **+0.039**); it does not lift the smaller models. Details in Section 5. |
 | **Why it matters** | Most RL benchmarks score "did the agent finish the task." They cannot detect when training has produced a faster, more confident, *unsafe* policy. Viveka can, and did. |
 
@@ -18,7 +18,9 @@ Author: [Debashis Maharana](https://linkedin.com/in/debashism37), 3rd year CS at
 
 ![Viveka leaderboard, frontier vs trained, sealed eval](eval/plots/leaderboard.png)
 
-*One chart that summarises the work. Frontier closed models occupy the top band (Claude Sonnet 0.78, Claude Haiku 0.78, GPT-4o-mini 0.61, GPT-5.2 0.44). The open-source band sits at 0.13 to 0.29. Our three trained LoRAs cluster in the middle: two of them (Qwen-1.5B, Llama-3B) lift their baselines by +0.020; one (Llama-1B) regresses by 0.158. That regression is the load-bearing observation of this post. The black overlay on each bar is the per-policy T4 mean. Even Claude Sonnet only scores 0.44 on T4, which is the env doing exactly what it was designed to do.*
+*One chart that summarises the hackathon-time work. Frontier closed models occupy the top band (Claude Sonnet 0.78, Claude Haiku 0.78, GPT-4o-mini 0.61, GPT-5.2 0.44) at n=12. The open-source band sits at 0.13 to 0.29. Our three trained LoRAs cluster in the middle: two of them (Qwen-1.5B, Llama-3B) lift their baselines by +0.020; one (Llama-1B) regresses by 0.158. That regression is the load-bearing observation of this post. The black overlay on each bar is the per-policy T4 mean. Even Claude Sonnet only scores 0.44 on T4, which is the env doing exactly what it was designed to do.*
+
+*Note: the Claude Haiku bar in this image is from the original n=12 baseline file, which a post-hackathon audit found to be a mislabelled Sonnet rerun (`policy_name = claude-sonnet-4-6` inside the JSON). A clean Haiku 4.5 rerun at n=68 gives mean **0.591** and T4 **0.295**. The corrected frontier table is in Section 9.*
 
 ---
 
@@ -367,16 +369,22 @@ Frontier evaluation has a known weakness, sometimes called the reasoning-vs-retr
 
 Viveka is one attempt at the same question from the agent-safety side. Indian DPI's business rules are too recent and too jurisdiction-specific to live in pretraining corpora at the density a model could memorize. UPI fraud-watchlist codes, DigiLocker audience-whitelist semantics, and IRCTC chart-prep cutoffs are not retrievable; they have to be reasoned about from the env's state. The capacity stratification I observed in the hackathon runs (Llama-1B fails T4 entirely, Qwen-1.5B passes with a small cost, Llama-3B passes with a smaller cost) is sharpened by the frozen-base evidence in Section 5.1: irreversibility recognition is **14% accurate at 1B, 74% at 3B, and 88% at 7B** before any training. That gradient supports the broader thesis: reversibility reasoning is gated by model capacity in a way retrieval would not predict, and 1B parameters is below the threshold for safe action-taking under this kind of constraint. Independent of the safety angle, this resembles recent findings in the RL-for-LLMs literature on memorization versus reasoning in language models: scaling certain model dimensions improves shallow pattern coverage without improving the underlying reasoning skill. Viveka's result is the safety-side mirror of that observation at small capacity.
 
-For grounding, here are the frontier baselines on Viveka's sealed evaluation (n=12, three per tier):
+For grounding, here are the frontier baselines on Viveka's sealed evaluation. Sonnet, GPT-4o-mini, and GPT-5.2 ran at **n=12** (3 per tier). Claude Haiku 4.5 was rerun at **n=68** (the full scenario set) after a labelling issue surfaced in the original n=12 file (the file marked "haiku" had `policy_name = claude-sonnet-4-6` inside, so it was a second Sonnet pass, not a Haiku run).
 
-| Policy | Mean | T1 | T2 | T3 | T4 |
-|---|---|---|---|---|---|
-| Claude Haiku 4.5 | **0.778** | 0.967 | 0.858 | 0.843 | 0.442 |
-| Claude Sonnet 4.6 | **0.776** | 0.967 | 0.841 | 0.855 | 0.442 |
-| GPT-4o-mini | 0.614 | 0.975 | 0.688 | 0.633 | 0.159 |
-| GPT-5.2 | 0.437 | 0.948 | 0.320 | 0.330 | 0.152 |
+| Policy | n | Mean | T1 | T2 | T3 | T4 |
+|---|---|---|---|---|---|---|
+| Claude Sonnet 4.6 | 12 | **0.776** | 0.967 | 0.841 | 0.855 | 0.442 |
+| GPT-4o-mini | 12 | 0.614 | 0.975 | 0.688 | 0.633 | 0.159 |
+| Claude Haiku 4.5 | **68** | **0.591** | 0.804 | 0.836 | 0.499 | **0.295** |
+| GPT-5.2 | 12 | 0.437 | 0.948 | 0.320 | 0.330 | 0.152 |
 
-Two things this table proves. **The env is solvable**: Claude Sonnet at 0.78 means there is a real ceiling and the gradient is meaningful, so Viveka is not an impossible benchmark where everyone bottoms out. **T4 is genuinely adversarial**: even Claude Sonnet drops to 0.44, and GPT-4o-mini and GPT-5.2 collapse near 0.15. The `must_not_execute` hard gates and the fraud-VPA, mule-beneficiary, and chart-prepared traps catch frontier models too. The Llama-1B story in Section 4 is the open-source mirror of the same effect at lower capacity.
+Three things this table proves.
+
+**The env is solvable.** Claude Sonnet at 0.78 means there is a real ceiling and the gradient is meaningful, so Viveka is not an impossible benchmark where everyone bottoms out.
+
+**T4 is genuinely adversarial across labs.** Even Claude Sonnet drops to 0.44, and GPT-4o-mini and GPT-5.2 collapse near 0.15. The `must_not_execute` hard gates and the fraud-VPA, mule-beneficiary, and chart-prepared traps catch frontier models too. The Llama-1B story in Section 4 is the open-source mirror of the same effect at lower capacity.
+
+**Within-family capacity also matters.** Inside Anthropic's lineup, Haiku 4.5 (mean 0.59, T4 0.30) lands meaningfully below Sonnet 4.6 (mean 0.78, T4 0.44). The biggest gap is on T3 (0.50 vs 0.86), the state-dependent-reversibility tier. That within-lab gap matches the open-source base-capacity gradient I report in Section 5.1 (14% / 74% / 88% on irreversibility recognition): the skill is sensitive to model capacity inside a given family, not just across labs.
 
 The Llama-1B observation also suggests something narrower and more useful. Reward-hacked emergent misalignment, the failure mode Anthropic documented at production scale, is detectable at small scale with the right evaluation design. You do not need frontier compute to see the pattern. You need a hard gate on irreversible adversarial actions, a deterministic grader that cannot be talked into giving partial credit, and a substrate where surface-pattern matching does not yield a passing policy. The methodology, deterministic graders plus must-not-execute hard gates plus Brier-scored calibration plus an AQI-style probe of internal representations, generalizes to other domains. Coding agents would be the obvious next substrate.
 
