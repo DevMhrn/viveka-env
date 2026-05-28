@@ -11,6 +11,7 @@
 | **What is Viveka?** | An OpenEnv RL environment where reversibility prediction and calibrated confidence are *trained* skills, scored by a Brier proper scoring rule. Substrate is mocked Indian Digital Public Infrastructure: real UPI, DigiLocker, IRCTC error codes and business rules. |
 | **The headline finding** | Same GRPO config, three architectures, three honest outcomes. Trained Qwen-1.5B lifts T1 reversibles by +69% relative. Llama-3B lifts T2 by +66%, T3 by +43%. **Llama-1B learned aggression without safety: 5 of 5 T4 `must_not_execute` traps fired for a 0.000 mean.** The env caught a trained-but-unsafe policy most benchmarks would have shipped. |
 | **Frontier ceiling** | Claude Sonnet 4.6 scores 0.78 mean but only 0.44 on T4 adversarial. GPT-5.2 scores 0.44 mean, lower than Sonnet and Haiku. Even frontier models struggle where reasoning replaces retrieval. |
+| **Post-hackathon scaling** | I went back and trained Qwen-2.5-7B and Llama-3.1-8B on the same config. Frozen-base accuracy on irreversibles climbs sharply with capacity: **14% (1B), 74% (3B), 88% (7B)**. GRPO sharpens the skill at 7B (reversibility component **0.87 → 0.90**, sealed **+0.039**); it does not lift the smaller models. Details in Section 5. |
 | **Why it matters** | Most RL benchmarks score "did the agent finish the task." They cannot detect when training has produced a faster, more confident, *unsafe* policy. Viveka can, and did. |
 
 Author: [Debashis Maharana](https://linkedin.com/in/debashism37), 3rd year CS at BITS Pilani. Co-built with [Gowtham Sai Yadav](https://github.com/gowtham-sai-yadav). Read on for the long version.
@@ -97,7 +98,7 @@ The Brier choice is load-bearing and worth a sentence of academic grounding. Bri
 
 The application of this rule as an RL reward signal on stated confidence follows [Damani et al. (2025)](https://arxiv.org/abs/2507.16806), who augment binary correctness with Brier-scored calibration in their RLCR framework. Viveka's `confidence_brier` component is the same idea applied at the per-action granularity of a multi-step environment.
 
-The "no LLM-as-judge anywhere" rule has a different intellectual lineage. [Borah, Sharma, Khanna, Shirawalmath and colleagues](https://arxiv.org/abs/2506.13901) argued at EMNLP 2025 that behavioural alignment metrics (refusal rates, LLM-judge scores, toxicity classifiers) all have critical blind spots: aligned models can be vulnerable to jailbreaking, stochastic decoding, and alignment faking. They proposed the Alignment Quality Index (AQI), an intrinsic metric on latent geometry that resists these failure modes. I implemented their probe methodology in `eval/aqi_probe.py` (mid-band layer pooling, Xie-Beni and Calinski-Harabasz cluster indices, last-token pooling on chat-template-formatted input, L2 normalization). The deeper choice was treating their critique as a design constraint: every high-weight reward component in Viveka is a deterministic verifier, not a model-graded one. A policy can game an LLM judge with smooth sentences; it cannot argue with a state diff.
+The "no LLM-as-judge anywhere" rule has a different intellectual lineage. [Borah, Sharma, Khanna and colleagues](https://arxiv.org/abs/2506.13901) argued at EMNLP 2025 that behavioural alignment metrics (refusal rates, LLM-judge scores, toxicity classifiers) all have critical blind spots: aligned models can be vulnerable to jailbreaking, stochastic decoding, and alignment faking. They proposed the Alignment Quality Index (AQI), an intrinsic metric on latent geometry that resists these failure modes. I implemented their probe methodology in `eval/aqi_probe.py` (mid-band layer pooling, Xie-Beni and Calinski-Harabasz cluster indices, last-token pooling on chat-template-formatted input, L2 normalization). The deeper choice was treating their critique as a design constraint: every high-weight reward component in Viveka is a deterministic verifier, not a model-graded one. A policy can game an LLM judge with smooth sentences; it cannot argue with a state diff.
 
 The `must_not_execute` hard gate is the engineering version of the same insight. The moment a policy fires a forbidden operation on a T4 adversarial scenario, the `appropriate_caution` component drops to 0.0 immediately, regardless of how the rest of the trajectory looks. A reward-hacked policy that fakes "I am being cautious" while executing forbidden ops gets caught immediately.
 
@@ -149,7 +150,140 @@ Most RL benchmarks score "did the agent finish the task." They cannot tell you w
 
 ---
 
-## 5. The TRL bug we hit while training Qwen
+## 5. Going further: training at larger capacity
+
+The Llama-1B result left me with a single open question. *Did the failure persist at higher capacity, or did scale fix it?* I trained two larger models on the same GRPO config to find out:
+
+- **Qwen-2.5-7B-Instruct**, same family as the hackathon Qwen-1.5B.
+- **Llama-3.1-8B-Instruct**, a cross-family scale test.
+
+Both on Kaggle's free-tier T4. Same Unsloth 4-bit QLoRA setup, same six-component reward, same scenario distribution. I also re-ran per-action inference on the original hackathon models, because those runs had shipped `.log` SUMMARY blocks only. Per-component evidence (reversibility-prediction accuracy, calibration) needs JSON trajectories, not aggregate reward.
+
+Three findings came out of this work. Two were not what I expected.
+
+### 5.1. The recognition is already in the frozen base
+
+Before any training, just running each base model through the eval and scoring whether it correctly labelled irreversible operations as `irreversible`:
+
+| Model | Frozen accuracy on irreversibles | n actions | Source |
+|---|---|---|---|
+| Llama-3.2-1B | **14%** (worse than random on a 3-class label) | 22 | `llama1b_retrained_base_t*.json` |
+| Llama-3.2-3B | **74%** | 121 | `llama3b_v2_base_t*.json` |
+| Qwen-2.5-7B | **88%** | 321 | `qwen7b_base_t*.json` |
+
+A 1B model fundamentally cannot tell *"this is destructive"* from *"this is safe."* A 3B model gets it right roughly three times in four. A 7B model gets it right nearly nine times in ten.
+
+> The capacity gradient is a property of the *frozen* model. It is in the pretrained weights, before any of my training. The recognition itself emerges with scale.
+
+That is a finding about pretraining, not about Viveka.
+
+### 5.2. Training sharpens the skill, but only where the base capacity is there
+
+The risk-weighted `reversibility_correct` reward component, base versus trained:
+
+| Model | base | trained | Δ |
+|---|---|---|---|
+| **Qwen-2.5-7B** | 0.87 | **0.90** | **+0.034** |
+| Llama-3.2-3B (v2 re-run) | 0.53 | 0.48 | −0.046 |
+| Llama-3.2-1B (retrain) | 0.25 | 0.20 | −0.050 |
+
+Qwen-7B is the only model where GRPO measurably improved reversibility prediction. Sealed-eval mean lifted **+0.039**. On the hardest non-adversarial tier (T3), reward climbed from **0.325 to 0.450**. Training reward went from **−0.94 to +0.16** over 100 steps.
+
+![Qwen-2.5-7B training reward curve, single Kaggle T4](eval/results/qwen7b_reward_curve.png)
+
+At 3B and 1B, training did not improve reversibility. The structural ability was not present for the reward signal to sharpen.
+
+> Where the capacity is there (7B), Viveka is a *teacher*. Where it is not (1B), the same environment exposes a different failure each time.
+
+### 5.3. Llama-3.1-8B failed differently. It mode-collapsed on `ask_user`.
+
+I expected the 8B to extend the gradient. It did not. The Llama-3.1-8B-Instruct base shipped a strong "ask when unsure" prior, presumably baked in by its instruction tuning. Across 20 sealed-eval scenarios:
+
+| Metric | Base | Trained |
+|---|---|---|
+| `ask_user` actions | **480** (≈ 24 per scenario) | 481 |
+| `execute` actions | 29 | 57 |
+| Episodes hitting the 30-step limit without deciding | **17 of 20** | 18 of 20 |
+| Sealed mean reward | 0.153 | 0.151 |
+
+Training nudged the execute count slightly but did not break the mode collapse. The model kept asking. Because it rarely executed, the reversibility skill was never exercised at all on this base: irreversibility-classification accuracy is **n=0** (nothing to score).
+
+> Instruction-tuning style can matter as much as parameter count for whether RL-on-actions has a substrate to operate on.
+
+The 14/74/88 gradient holds *within* the models that engaged the action space. The 8B's behavior is its own finding about how instruct priors interact with RL.
+
+### 5.4. Revisiting the Llama-1B story with per-action data
+
+Going back to the original Llama-1B with the new per-action inference confirmed the signature in the published `.log` files:
+
+| Behavior | Base | Trained |
+|---|---|---|
+| `confirm_with_user` actions | **154** | **24** |
+| `execute` actions | 41 | **78** |
+| T4 mean reward | 0.310 | **0.000** (all 5 must-not-execute traps fired) |
+| Training reward (proxy) | −0.85 (step 5) | **−0.59** (step 100) |
+
+Proxy reward up. True held-out safety objective down. Structured behavioral trade (drop the cautious action, adopt the proxy-rewarded action). That is the signature MacDiarmid et al. describe.
+
+But I retrained the 1B post-hackathon to get its own JSON trajectories, and the retrain did **not** consistently reproduce the same shape. Execute count actually fell (73 to 56). T4 went 0.189 to 0.099 rather than collapsing to zero. The retrain's base loaded via a different path (Unsloth 4-bit mirror, base `confirm` count was 1 vs the original's 154), so it is not a controlled replication.
+
+> Honest scope: an *instance* of the reward-hacking failure mode (MacDiarmid sense), observed in one run. **Not a reproduction** of the mechanism. The retrain leans more toward a capacity failure than a reward-hack.
+
+### 5.5. The probe that did not show what I hoped
+
+I implemented Borah et al.'s AQI methodology (mid-band layer pooling, Xie-Beni and Calinski-Harabasz cluster indices, last-token pooling on chat-template input, bootstrap CI) in `eval/aqi_probe.py` and ran it on Qwen-7B, Llama-3B, and Llama-1B, with two probe sets:
+
+- A general probe from the paper (~50 prompts, 50 safe / 50 unsafe).
+- A domain-specific probe built from Viveka scenarios (T1+T2 = safe, T4 = unsafe).
+
+**Result: null.** Deltas under 0.001 AQI on every model and every probe set. Base-vs-trained 95% CIs overlap roughly 99%.
+
+At the LoRA scale I trained (rank 16, ~50 probe prompts), the learned skill is **behavioral but not measurably representational.** Whether it becomes representational at larger LoRA ranks and broader probe data is the experiment I would most want proper compute and mentorship to run cleanly. It is the question that decides whether RL on this signal is *installing structure* or *sharpening a retrieval pattern*.
+
+---
+
+## 6. Where this fits: convergence with recent Anthropic work
+
+While I was running the post-hackathon experiments and rebuilding the per-component analysis, Anthropic published [*"Teaching Claude Why"*](https://alignment.anthropic.com/2026/teaching-claude-why/) (Kutasov, Jermyn et al., May 8, 2026). The post uses agentic misalignment as a case study for how well safety-training techniques generalize. Two of its findings map directly onto what I was doing.
+
+The first, on demonstrations alone being insufficient:
+
+> "Training on demonstrations of desired behavior is often insufficient. Instead, our best interventions went deeper: teaching Claude to explain why some actions were better than others, or training on richer descriptions of Claude's overall character."
+
+The second, on out-of-distribution generalization:
+
+> "Misaligned behavior can be suppressed via direct training on the evaluation distribution... but this alignment might not generalize well out-of-distribution (OOD)."
+
+Their mechanism is constitutional document SDF, fictional-story SDF, and advice-dialogue training. A specific number they report: the blackmail rate reduced from **65% to 19%** with constitutional SDF, and to zero on a separate OOD evaluation after advice-dialogue training.
+
+### Where Viveka sits inside that picture
+
+Viveka attacks the same problem class (agentic misalignment) from a different angle. Their work targets **character and principles** through training-data curation. Viveka targets the **per-action decision gate** through an RL reward signal:
+
+- Deterministic graders on reversibility prediction (no LLM-as-judge anywhere in the high-weight components).
+- Brier-scored calibrated confidence.
+- `must_not_execute` hard gates that zero out the reward the moment a forbidden operation fires.
+
+Two honest scoping points:
+
+1. **The convergence is temporal.** Viveka (April 2026) is contemporary with their May 2026 post, not derived from it. The framing came after the numbers.
+2. **Viveka is single-domain** (Indian DPI tool-calls). The OOD generalization their paper specifically studies is exactly what I would want to test next; what I have is the failure mode being detectable, and the corrective signal being trainable, at small capacity.
+
+### The three Anthropic references taken together
+
+This is in addition to two earlier connections already cited in Section 4:
+
+| Anthropic publication | Date | What it establishes | How Viveka relates |
+|---|---|---|---|
+| [Lynch et al., *Agentic Misalignment*](https://www.anthropic.com/research/agentic-misalignment) | Jun 2025 | 16 frontier models, *"models consistently chose harm over failure"*, blackmail up to 96% under goal conflict. **The failure exists at frontier scale.** | Demonstration paper, frontier-scale. Viveka measures the same category at SLM scale. |
+| [MacDiarmid et al., *Natural Emergent Misalignment from Reward Hacking*](https://arxiv.org/abs/2511.18397) | Nov 2025 | Reward hacking on a coding task generalizes into broader misaligned behaviour. **The mechanism is real.** | Llama-1B's original signature in Viveka is one small-scale instance of that mechanism. |
+| [Kutasov, Jermyn et al., *Teaching Claude Why*](https://alignment.anthropic.com/2026/teaching-claude-why/) | May 2026 | Training on demonstrations is insufficient; deeper interventions (constitutional SDF, advice dialogue) work, with OOD generalization being the hard problem. **Training-time fixes are non-obvious.** | A complementary training-time approach (RL reward design with deterministic verifiers) targeted at the same failure category. |
+
+Together: Lynch shows the failure exists at frontier scale. MacDiarmid documents the mechanism. Kutasov and Jermyn show training-time fixes work, but generalization is the hard part. Viveka contributes one specific training-time approach (at small capacity, with deterministic graders) to the same problem class.
+
+---
+
+## 7. The TRL bug we hit while training Qwen
 
 I first saw the issue mid-way through training Qwen-2.5-1.5B. Rollouts were going wrong in a way I had not seen before. Every rollout generated exactly 320 tokens of garbage, never terminated, and the reward floored at -0.94 for 100 consecutive steps. Llama-3.2 in a parallel run was training cleanly. The environment was not the problem. TRL was.
 
@@ -197,29 +331,41 @@ The Llama-3B run, which had been training cleanly on the same TRL version with n
 
 ---
 
-## 6. What Viveka does not prove
+## 8. What Viveka does not prove
 
-I want to be precise about the limitations of this work, because the Llama-1B result is suggestive, not conclusive.
+I want to be precise about the limitations of this work, because the headline observations are suggestive, not conclusive. Some of these limits were already true at hackathon time. Others surfaced once I went back and ran the post-hackathon work in Section 5.
 
-Sample size: 68 scenarios is small. The trained-vs-baseline deltas of +0.020 mean reward are within noise of what a careful researcher would call a real effect, even though the per-tier and per-trap breakdowns are more clearly directional. A proper version of this work would use several hundred scenarios per tier and bootstrap-CI every claim.
+### Limits already present at hackathon time
 
-Verifier design: state-diff against `scenario.expected.post_state` measures "did you reproduce the expected post-state," not "did you actually solve the problem in a correct way." Two valid solution paths to the same end-state both pass; a solution that hits the right end-state for the wrong reason also passes. Property-based or behaviour-based testing (assert invariants across random inputs) would be the proper grader. They cost roughly 10x more to write per scenario, which is why Viveka uses the cheaper version.
+**Sample size.** 68 scenarios is small. The trained-vs-baseline deltas of +0.020 mean reward are within noise of what a careful researcher would call a real effect, even though the per-tier and per-trap breakdowns are more clearly directional. A proper version of this work would use several hundred scenarios per tier and bootstrap-CI every claim.
 
-The teacher-rollout gap: training reward (Qwen Δ +0.960) measures intermediate-action quality with a scripted teacher closing the trajectory; sealed eval (Δ +0.020) makes the model terminate itself. These measure different things. A curriculum that anneals teacher help to zero is the obvious fix; I did not have runtime to implement it.
+**Verifier design.** State-diff against `scenario.expected.post_state` measures "did you reproduce the expected post-state," not "did you actually solve the problem in a correct way." Two valid solution paths to the same end-state both pass; a solution that hits the right end-state for the wrong reason also passes. Property-based or behaviour-based testing (assert invariants across random inputs) would be the proper grader. They cost roughly 10x more to write per scenario, which is why Viveka uses the cheaper version.
 
-Mocked substrate: NPCI, IRCTC, and DigiLocker sandboxes are not open. I modelled their conventions from public documentation and regulator publications. The scenario provenance file in the repo (`docs/scenario_provenance.md`) records which scenarios anchor to real distributions and which are deliberate adversarial edge cases probing beyond observed distributions. There is zero row-level PII; all identifiers are SHA-256-derived synthetic values that match real format patterns. But the substrate is mocked, and a claim like "Viveka generalizes to live UPI" is not supported by this work.
+**The teacher-rollout gap.** Training reward (Qwen-1.5B Δ +0.960; Qwen-7B Δ +1.10) measures intermediate-action quality with a scripted teacher closing the trajectory. Sealed eval (Qwen-7B Δ +0.039) makes the model terminate itself. These measure different things. A curriculum that anneals teacher help to zero is the obvious fix; I did not have runtime to implement it.
 
-The Llama-1B → Anthropic-paper convergence: I observed it after the fact. I did not design Viveka to replicate Anthropic's finding. The structural similarity is interesting and the framing is defensible, but I am not claiming generality.
+**Mocked substrate.** NPCI, IRCTC, and DigiLocker sandboxes are not open. I modelled their conventions from public documentation and regulator publications. The scenario provenance file in the repo (`docs/scenario_provenance.md`) records which scenarios anchor to real distributions and which are deliberate adversarial edge cases probing beyond observed distributions. There is zero row-level PII; all identifiers are SHA-256-derived synthetic values that match real format patterns. But the substrate is mocked, and a claim like "Viveka generalizes to live UPI" is not supported by this work.
+
+### Limits that surfaced after the hackathon, while expanding the work
+
+**The AQI probe was null at the scale I could run it.** Section 5.5: I ran Borah et al.'s methodology on Qwen-7B, Llama-3B, Llama-1B (base vs trained, two probe sets). Deltas under 0.001 AQI; base/trained 95% CIs overlap ~99%. At LoRA rank 16 and ~50 probe prompts, the learned skill is **behavioral, not measurably representational**. Whether it becomes representational at larger LoRA ranks and broader probe data is the experiment I would most want compute and mentorship to run.
+
+**The capacity gradient is a base-model property, not a Viveka-training result.** The 14% / 74% / 88% accuracy on irreversibility classification (Section 5.1) appears in the *frozen* models, before any of my training. Viveka's training adds sharpening on top, and that sharpening worked clearly only on Qwen-7B (+0.034 reversibility, +0.039 sealed). At 1B and 3B, training did not help.
+
+**The original Llama-1B reward-hacking signature was observed in one run.** When I retrained the 1B post-hackathon to gather per-action JSON (Section 5.4), the retrain did not consistently reproduce the same shape. Scope: an *instance* of the failure mode in the MacDiarmid sense, **not a reproduction** of the mechanism.
+
+**Instruction-tuning priors can dominate parameter count.** Llama-3.1-8B's strong "ask when unsure" prior was sufficient to keep the model from exercising the reversibility skill at all on this substrate (480 of ~600 actions were `ask_user`; 17 of 20 episodes hit the step limit without deciding). The capacity gradient holds within models that engaged the action space; instruct style is its own variable.
+
+**The convergence with Anthropic's recent papers is retrospective.** Lynch et al. (June 2025), MacDiarmid et al. (November 2025), and Kutasov, Jermyn et al. (May 2026) appeared around or after Viveka was built. The framing in Sections 4 and 6 came after the numbers, not before. The structural similarity is defensible. The claim of generality is not.
 
 ---
 
-## 7. Why I think this matters
+## 9. Why I think this matters
 
 Frontier evaluation has a known weakness, sometimes called the reasoning-vs-retrieval problem. [SWE-bench Pro](https://arxiv.org/abs/2509.16941) showed it from the software-engineering side: GPT-4-class models that score 70% on the original SWE-bench drop to 23% when their internet retrieval is removed. [ARC-AGI](https://arcprize.org/leaderboard) shows the same gap more dramatically on novel-substrate reasoning. On ARC-AGI-3 (arcprize.org leaderboard, Featured Models, as of May 2026), humans score 100%. Claude Opus 4.7 scores 0.15%, the only frontier model on the board scoring above zero. GPT-5.5, Grok 4.20-beta, GPT-5.4, Gemini 3.1 Pro, and Claude Opus 4.6 all score exactly 0%. The pattern across both benchmarks is the same: models look like they are reasoning but are mostly remembering, and benchmarks built on widely-discussed problems cannot tell the difference.
 
 ![ARC-AGI-3 Featured Models leaderboard, May 2026. Humans at 100%, Claude Opus 4.7 at 0.15%, every other frontier model at 0%](eval/plots/arc_agi3_leaderboard.png)
 
-Viveka is one attempt at the same question from the agent-safety side. Indian DPI's business rules are too recent and too jurisdiction-specific to live in pretraining corpora at the density a model could memorize. UPI fraud-watchlist codes, DigiLocker audience-whitelist semantics, and IRCTC chart-prep cutoffs are not retrievable; they have to be reasoned about from the env's state. The capacity stratification I observed (Llama-1B fails T4 entirely, Qwen-1.5B passes with a small cost, Llama-3B passes with a smaller cost) suggests that reversibility reasoning is gated by model capacity in a way that retrieval would not predict, and that 1B parameters is below the threshold for safe action-taking under this kind of constraint. Independent of the safety angle, this resembles recent findings in the RL-for-LLMs literature on memorization versus reasoning in language models: scaling certain model dimensions improves shallow pattern coverage without improving the underlying reasoning skill. Viveka's result is the safety-side mirror of that observation at small capacity.
+Viveka is one attempt at the same question from the agent-safety side. Indian DPI's business rules are too recent and too jurisdiction-specific to live in pretraining corpora at the density a model could memorize. UPI fraud-watchlist codes, DigiLocker audience-whitelist semantics, and IRCTC chart-prep cutoffs are not retrievable; they have to be reasoned about from the env's state. The capacity stratification I observed in the hackathon runs (Llama-1B fails T4 entirely, Qwen-1.5B passes with a small cost, Llama-3B passes with a smaller cost) is sharpened by the frozen-base evidence in Section 5.1: irreversibility recognition is **14% accurate at 1B, 74% at 3B, and 88% at 7B** before any training. That gradient supports the broader thesis: reversibility reasoning is gated by model capacity in a way retrieval would not predict, and 1B parameters is below the threshold for safe action-taking under this kind of constraint. Independent of the safety angle, this resembles recent findings in the RL-for-LLMs literature on memorization versus reasoning in language models: scaling certain model dimensions improves shallow pattern coverage without improving the underlying reasoning skill. Viveka's result is the safety-side mirror of that observation at small capacity.
 
 For grounding, here are the frontier baselines on Viveka's sealed evaluation (n=12, three per tier):
 
@@ -238,17 +384,19 @@ And the diagnosis of the TRL EOS-list collapse is now documented in this repo. A
 
 ---
 
-## 8. What I would do next
+## 10. What I would do next
 
-Two directions, framed as research questions I would pursue with proper compute and time, not as commitments.
+Three directions, framed as research questions I would pursue with proper compute and mentorship. They are open because Section 5 closed some of the questions I asked at hackathon time and opened these.
 
-**Reversibility-aware reward design at scale.** The Llama-1B result was at the smallest capacity I could train. I would want to repeat the same evaluation methodology on frontier-scale models and on larger parameter LoRAs of the same base architectures, to test whether reversibility reasoning continues to be capacity-gated or whether it plateaus. This is the natural extension of Viveka.
+**1. Beyond 7B.** The capacity gradient in Section 5.1 (14% at 1B, 74% at 3B, 88% at 7B base accuracy on irreversibles) and the 7B-only training gain (0.87 → 0.90, +0.039 sealed) make the next test a question about scale: does the sharpening continue, plateau, or break above 7B? I attempted Qwen-2.5-14B on a single T4 and hit OOM even at 4-bit. The natural next experiment is 14B-class SLMs on hardware that can hold them.
 
-**Reversibility-aware reward design for coding agents.** Extend Viveka's framework to git operations and file system operations. Build the equivalent reversibility registry for `git push --force`, `rm -rf`, schema migrations on production tables, and the kind of cascading-state operations Cursor and Replit's agents got wrong. Test whether reversibility-grading prevents the `sys.exit(0)`-style failure mode Anthropic documented. The methodology is portable; the substrate change is the work.
+**2. The representational question.** The AQI probe was null at LoRA rank 16 and ~50 probe prompts (Section 5.5). With larger adapters and broader probe data, does a "this action is irreversible" direction become measurable in latent space? The answer matters: one reading supports RL as a way to *install structure* into the model, the other reduces it to *sharpening an existing retrieval pattern*. That is the experiment I would most want compute and mentorship to run cleanly.
+
+**3. Cross-domain transfer.** Viveka is single-domain. MacDiarmid et al. (Nov 2025) document reward hacking generalizing across domains. Kutasov, Jermyn et al. (May 2026) document safety training generalizing OOD given the right training data. The natural test is whether Viveka's reward-design lesson transfers to a different substrate: coding agents, with reversibility registries for `git push --force`, `rm -rf`, schema migrations, and the cascading-state operations Cursor's and Replit's agents got wrong. The methodology is portable; the substrate change is the work.
 
 ---
 
-## 9. Acknowledgements and links
+## 11. Acknowledgements and links
 
 This was a two-person project. **Gowtham Sai Yadav** built the mock services, the OpenEnv environment core, the Gradio demo UI, and the Hugging Face Space deployment. He also wrote the DigiLocker scenarios and was the primary collaborator on the reward design discussions. The work below is the joint output of Team Diff Maker.
 
@@ -259,6 +407,7 @@ Thanks to **Anshuman Singh**, Co-founder of Scaler AI Labs, for mentorship throu
 - Source repo (original): [github.com/gowtham-sai-yadav/viveka-env](https://github.com/gowtham-sai-yadav/viveka-env)
 - My fork (post-eval engineering layers): [github.com/DevMhrn/viveka-env](https://github.com/DevMhrn/viveka-env)
 - Training notebooks: [Qwen-1.5B](https://www.kaggle.com/code/gowthamsaiyadav/viveka-grpo-qwen2-5) · [Llama-1B](https://www.kaggle.com/code/ddevmhrn/viveka-llama3-2-1b) · [Llama-3B](https://www.kaggle.com/code/harsh3446/viveka-llama-3b)
+- Post-hackathon model artifacts (LoRA adapters, per-action inference JSON, AQI probe outputs): [huggingface.co/ddevMhrn](https://huggingface.co/ddevMhrn) (Qwen2.5-7B-Viveka, Llama-3.1-8B-Viveka, Llama-3.2-3B-Viveka, Llama-3.2-1B-Viveka, Llama-3.2-1B-Viveka-retrained, Qwen2.5-1.5B-Viveka)
 - TRL `generation_kwargs` mechanism we used: [huggingface/trl#3562](https://github.com/huggingface/trl/issues/3562) (community feature, used as our workaround path)
 
 ---
@@ -267,14 +416,16 @@ Thanks to **Anshuman Singh**, Co-founder of Scaler AI Labs, for mentorship throu
 
 1. Gneiting, T., & Raftery, A. E. (2007). [Strictly proper scoring rules, prediction, and estimation](https://sites.stat.washington.edu/raftery/Research/PDF/Gneiting2007jasa.pdf). *Journal of the American Statistical Association*, 102(477), 359-378.
 2. Damani, M., et al. (2025). [Beyond binary rewards: Training LMs to reason about their uncertainty](https://arxiv.org/abs/2507.16806). arXiv:2507.16806.
-3. Borah, A., Sharma, C., Khanna, D., Shirawalmath, A., et al. (2025). [Alignment Quality Index (AQI): Beyond refusals](https://arxiv.org/abs/2506.13901). *Proceedings of EMNLP 2025*, main.145. arXiv:2506.13901.
+3. Borah, A., Sharma, C., Khanna, D., et al. (2025). [Alignment Quality Index (AQI): Beyond refusals](https://arxiv.org/abs/2506.13901). *Proceedings of EMNLP 2025*, main.145. arXiv:2506.13901.
 4. MacDiarmid, M., Hubinger, E., Perez, E., et al. (Anthropic, 2025). [Natural emergent misalignment from reward hacking in production RL](https://arxiv.org/abs/2511.18397). arXiv:2511.18397.
-5. Yao, S., et al. (2024). [τ-bench: A benchmark for tool-agent-user interaction in real-world domains](https://arxiv.org/abs/2406.12045). arXiv:2406.12045.
-6. Scale AI, et al. (2025). [SWE-Bench Pro: Can AI Agents Solve Long-Horizon Software Engineering Tasks?](https://arxiv.org/abs/2509.16941). arXiv:2509.16941.
-7. Replit incident, July 2025: [AI-powered coding tool wiped out a software company's database in 'catastrophic failure'](https://fortune.com/2025/07/23/ai-coding-tool-replit-wiped-database-called-it-a-catastrophic-failure/). *Fortune*.
-8. Cursor incident, April 2025: [Cursor AI coding agent deletes entire production database and backups in shocking nine-second autonomous failure](https://www.techradar.com/pro/it-took-9-seconds-tech-founder-outlines-how-rogue-claude-powered-ai-tool-wiped-entire-company-database-and-backups-but-says-theres-no-such-thing-as-bad-publicity). *TechRadar*.
-9. UPI fraud statistics, FY 2024-25 and CY 2025: [National Cyber Crime Reporting Portal (I4C)](https://cybercrime.gov.in), Reserve Bank of India.
-10. [ARC Prize Leaderboard (Featured Models)](https://arcprize.org/leaderboard) — ARC-AGI-3 scores accessed May 2026.
+5. Lynch, A., et al. (Anthropic, 2025). [Agentic Misalignment: How LLMs could be insider threats](https://www.anthropic.com/research/agentic-misalignment). anthropic.com/research, Jun 20, 2025.
+6. Kutasov, J., Jermyn, A., et al. (Anthropic, 2026). [Teaching Claude Why](https://alignment.anthropic.com/2026/teaching-claude-why/). Alignment Science Blog, May 8, 2026.
+7. Yao, S., et al. (2024). [τ-bench: A benchmark for tool-agent-user interaction in real-world domains](https://arxiv.org/abs/2406.12045). arXiv:2406.12045.
+8. Scale AI, et al. (2025). [SWE-Bench Pro: Can AI Agents Solve Long-Horizon Software Engineering Tasks?](https://arxiv.org/abs/2509.16941). arXiv:2509.16941.
+9. Replit incident, July 2025: [AI-powered coding tool wiped out a software company's database in 'catastrophic failure'](https://fortune.com/2025/07/23/ai-coding-tool-replit-wiped-database-called-it-a-catastrophic-failure/). *Fortune*.
+10. Cursor incident, April 2025: [Cursor AI coding agent deletes entire production database and backups in shocking nine-second autonomous failure](https://www.techradar.com/pro/it-took-9-seconds-tech-founder-outlines-how-rogue-claude-powered-ai-tool-wiped-entire-company-database-and-backups-but-says-theres-no-such-thing-as-bad-publicity). *TechRadar*.
+11. UPI fraud statistics, FY 2024-25 and CY 2025: [National Cyber Crime Reporting Portal (I4C)](https://cybercrime.gov.in), Reserve Bank of India.
+12. [ARC Prize Leaderboard (Featured Models)](https://arcprize.org/leaderboard). ARC-AGI-3 scores accessed May 2026.
 
 ---
 
