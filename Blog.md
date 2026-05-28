@@ -73,8 +73,6 @@ Gowtham built the mock services, the OpenEnv environment core, the Gradio demo U
 
 The question itself was not new to me. I had been turning over whether language models actually reason about consequences before they execute actions, or whether they retrieve a confident-looking pattern and call it reasoning. Viveka was a way to test that question in a sealed environment with a short build window and a teammate.
 
-Anshuman Singh has been a long-running mentor whose research instincts shaped how I approach evaluation methodology. The reward design choices in Viveka, particularly the no-LLM-as-judge constraint and the strict-proper-scoring choice for confidence, owe a lot to conversations with him about what makes a benchmark worth running.
-
 ---
 
 ## 3. The reward, and why every weight prevents a specific failure
@@ -408,10 +406,7 @@ Three directions, framed as research questions I would pursue with proper comput
 
 This was a two-person project. **Gowtham Sai Yadav** built the mock services, the OpenEnv environment core, the Gradio demo UI, and the Hugging Face Space deployment. He also wrote the DigiLocker scenarios and was the primary collaborator on the reward design discussions. The work below is the joint output of Team Diff Maker.
 
-Thanks to **Anshuman Singh**, Co-founder of Scaler AI Labs, for mentorship throughout the build, and to the **Meta PyTorch OpenEnv Hackathon** team for the substrate and the 9th-of-31,000+-team finals placement.
-
 - Live demo (Hugging Face Space): [huggingface.co/spaces/gowtham-sai-yadav/viveka-env](https://huggingface.co/spaces/gowtham-sai-yadav/viveka-env)
-- Demo video: [youtube.com/@debashis_maharana4105](https://www.youtube.com/@debashis_maharana4105)
 - Source repo (original): [github.com/gowtham-sai-yadav/viveka-env](https://github.com/gowtham-sai-yadav/viveka-env)
 - My fork (post-eval engineering layers): [github.com/DevMhrn/viveka-env](https://github.com/DevMhrn/viveka-env)
 - Training notebooks: [Qwen-1.5B](https://www.kaggle.com/code/gowthamsaiyadav/viveka-grpo-qwen2-5) · [Llama-1B](https://www.kaggle.com/code/ddevmhrn/viveka-llama3-2-1b) · [Llama-3B](https://www.kaggle.com/code/harsh3446/viveka-llama-3b)
